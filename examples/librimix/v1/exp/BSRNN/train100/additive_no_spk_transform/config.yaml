@@ -1,0 +1,59 @@
+checkpoint: exp/BSRNN/train_clean_100/additive_no_spk_transform/models/model_63.pt
+data_type: shard
+dataloader_args:
+  batch_size: 2
+  drop_last: true
+  num_workers: 4
+  pin_memory: false
+  prefetch_factor: 2
+dataset_args:
+  chunk_len: 48000
+  resample_rate: 16000
+  sample_num_per_epoch: 0
+  shuffle: true
+  shuffle_args:
+    shuffle_size: 2500
+enable_amp: false
+exp_dir: exp/BSRNN/train_clean_100/additive_no_spk_transform
+gpus:
+- 0
+- 1
+log_batch_interval: 100
+loss: SI_SNR
+loss_args: {}
+model: BSRNN
+model_args:
+  feature_dim: 128
+  num_repeat: 6
+  spk_emb_dim: 256
+  spk_fuse_type: additive
+  sr: 16000
+  stride: 128
+  use_spk_transform: false
+  win: 512
+model_init: null
+num_avg: 5
+num_epochs: 150
+optimizer: Adam
+optimizer_args:
+  lr: 0.001
+  weight_decay: 0.0001
+save_epoch_interval: 1
+scheduler: ExponentialDecrease
+scheduler_args:
+  epoch_iter: 3475
+  final_lr: 2.5e-05
+  initial_lr: 0.001
+  num_epochs: 150
+  scale_ratio: 0.5
+  warm_from_zero: false
+  warm_up_epoch: 0
+seed: 42
+train_data: data/clean/train-100/shard.list
+train_spk_embeds: data/clean/train-100/embed.scp
+train_utt2spk: data/clean/train-100/single.utt2spk
+val_data: data/clean/dev/shard.list
+val_spk1_enroll: data/clean/dev/spk1.enroll
+val_spk2_enroll: data/clean/dev/spk2.enroll
+val_spk_embeds: data/clean/dev/embed.scp
+val_utt2spk: data/clean/dev/single.utt2spk
