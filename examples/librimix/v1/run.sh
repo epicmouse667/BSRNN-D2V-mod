@@ -7,7 +7,7 @@
 stage=-1
 stop_stage=1
 
-data=data/both
+data=data/clean
 data_type="shard"  # shard/raw
 gpus="[0,1]"
 num_avg=5
@@ -34,6 +34,7 @@ if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ]; then
         --prefix shards \
         --shuffle \
         ${data}/$dset/wav.scp ${data}/$dset/utt2spk \
+        ${data}/$dset/utt2trans
         ${data}/$dset/shards ${data}/$dset/shard.list
   done
 fi

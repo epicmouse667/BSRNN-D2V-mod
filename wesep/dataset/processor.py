@@ -87,6 +87,9 @@ def tar_file_and_group(data):
                     if 'spk' in postfix:
                         example[postfix] = file_obj.read().decode(
                             'utf8').strip()
+                    elif 'trans' in postfix:
+                        example[postfix] = file_obj.read().decode(
+                            'utf8').strip()
                     elif postfix in AUDIO_FORMAT_SETS:
                         waveform, sample_rate = torchaudio.load(file_obj)
                         if prefix[-5:-1] == '_spk':

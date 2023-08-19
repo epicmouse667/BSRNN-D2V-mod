@@ -5,13 +5,13 @@ stage=-1
 stop_stage=-1
 
 mix_data_path='/workspace2/zixin/Datasets/Libri2Mix/wav16k/max'
-librispeech_path='/workspace2/zixin/Datasets/LibriSpeech'
+librispeech_path=/workspace2/zixin/Datasets/LibriSpeech
 
 data=
 . tools/parse_options.sh || exit 1
 
 data=data
-datatype=both
+datatype=clean
 
 data=$(realpath ${data})
 
@@ -20,7 +20,7 @@ if [ ${stage} -le 1 ] && [ ${stop_stage} -ge 1 ]; then
   for dataset in train-100 dev test; do
 #  for dataset in train-360; do
     echo "Preparing files for" $dataset
-
+    echo $librispeech_path
     # Prepare the meta data for the mixed data
     dataset_path=$mix_data_path/$dataset/mix_${datatype}
     mkdir -p "${data}"/$datatype/${dataset}
@@ -29,6 +29,10 @@ if [ ${stage} -le 1 ] && [ ${stop_stage} -ge 1 ]; then
       sed 's#.wav##' >"${data}"/$datatype/${dataset}/wav.scp
     awk '{print $1}' "${data}"/$datatype/${dataset}/wav.scp |
       awk -F[_-] '{print $0, $1,$4}' >"${data}"/$datatype/${dataset}/utt2spk
+    awk '{print $1}' "${data}"/$datatype/${dataset}/wav.scp |
+      awk -F[_-] -v librispeech_path="$librispeech_path" '{print $0,
+      librispeech_path"/"$1"/"$2"/"$1"-"$2".trans.txt",$3,
+      librispeech_path"/"$4"/"$5"/"$4"-"$5".trans.txt",$6}' >"${data}"/$datatype/${dataset}/utt2trans
 
     # Prepare the meta data for single speakers
     dataset_path=$mix_data_path/$dataset/s1
