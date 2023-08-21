@@ -15,7 +15,7 @@ dataset_args:
   shuffle_args:
     shuffle_size: 2500
 enable_amp: false
-exp_dir: exp/BSRNN_D2V/train100/base/
+exp_dir: exp/BSRNN_D2V/train100/pretrained_extraction/
 gpus:
 - 0
 - 1
@@ -29,6 +29,7 @@ model_args:
   feature_dim: 128
   num_repeat: 6
   pretrained_d2v4ctc_dir: /workspace2/zixin/Download/wav2vec2-base-960h
+  pretrained_extraction_path: exp/BSRNN/train100/FiLM_no_spk_transform/models/model_150.pt
   return_mask: true
   return_real_mask: true
   spk_emb_dim: 256
