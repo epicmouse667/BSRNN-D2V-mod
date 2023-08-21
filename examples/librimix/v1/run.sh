@@ -34,7 +34,7 @@ if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ]; then
         --prefix shards \
         --shuffle \
         ${data}/$dset/wav.scp ${data}/$dset/utt2spk \
-        ${data}/$dset/utt2trans
+        ${data}/$dset/utt2trans.txt \
         ${data}/$dset/shards ${data}/$dset/shard.list
   done
 fi
@@ -43,15 +43,15 @@ if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
 #  rm -r $exp_dir
   echo "Start training ..."
   num_gpus=$(echo $gpus | awk -F ',' '{print NF}')
-  torchrun --standalone --nnodes=1 --nproc_per_node=$num_gpus \
+  python -m torch.distributed.run --standalone --nnodes=1 --nproc_per_node=$num_gpus \
     wesep/bin/train.py --config $config \
       --exp_dir ${exp_dir} \
       --gpus $gpus \
       --num_avg ${num_avg} \
       --data_type "${data_type}" \
-      --train_data ${data}/train-460/${data_type}.list \
-      --train_spk_embeds ${data}/train-460/embed.scp \
-      --train_utt2spk ${data}/train-460/single.utt2spk \
+      --train_data ${data}/train-100/${data_type}.list \
+      --train_spk_embeds ${data}/train-100/embed.scp \
+      --train_utt2spk ${data}/train-100/single.utt2spk \
       --val_data ${data}/dev/${data_type}.list \
       --val_spk_embeds ${data}/dev/embed.scp \
       --val_utt2spk ${data}/dev/single.utt2spk \

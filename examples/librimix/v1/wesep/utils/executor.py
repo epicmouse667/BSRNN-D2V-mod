@@ -24,7 +24,7 @@ class Executor:
     def __init__(self):
         self.step = 0
 
-    def train(self, dataloader, model, epoch_iter, optimizer, criterion, scheduler, scaler, epoch, enable_amp, logger,
+    def train(self, dataloader, model, epoch_iter, optimizer, criterion, scheduler, scaler, epoch, enable_amp, logger,rank,
               log_batch_interval=100,
               device=torch.device('cuda')):
         ''' Train one epoch
@@ -33,7 +33,7 @@ class Executor:
         log_interval = log_batch_interval
         accum_grad = 1
         losses = []
-
+        si_snr_losses = []
         if isinstance(model, torch.nn.parallel.DistributedDataParallel):
             model_context = model.join
         else:
@@ -44,6 +44,12 @@ class Executor:
                 features = batch['wav_mix']
                 targets = batch['wav_targets']
                 enroll = batch['spk_embeds']
+                labels = batch['labels']
+                label_lens = batch['label_lens']
+                wav_lens = batch['wav_lens']
+                prob_lens = model.asr_model._get_feat_extract_output_lengths(
+                    wav_lens
+                ).to(torch.int32)
 
                 cur_iter = (epoch - 1) * epoch_iter + i
                 scheduler.step(cur_iter)
@@ -51,13 +57,30 @@ class Executor:
                 features = features.float().to(device)  # (B,T,F)
                 targets = targets.float().to(device)
                 enroll = enroll.float().to(device)
+                labels = labels.int().to(device)
+                label_lens = label_lens.int().to(device)
+                wav_lens = wav_lens.int().to(device)
+                prob_lens = prob_lens.int().to(device)
 
                 with torch.cuda.amp.autocast(enabled=enable_amp):
-                    outputs = model(features, enroll)
-                    loss = criterion(outputs, targets).mean() / accum_grad
+                    log_probs,outputs = model(
+                        wav_inputs = features, 
+                        spk_embeddings = enroll)
+                    loss,si_snr = criterion(
+                        est_wav = outputs,
+                        target_wav = targets,
+                        wav_len = wav_lens,
+                        log_prob = log_probs,
+                        prob_len = prob_lens,
+                        label = labels,
+                        label_len = label_lens,
+                    )
+                    loss,si_snr = loss.mean()/accum_grad,si_snr.mean()/accum_grad
 
                 losses.append(loss.item())
+                si_snr_losses.append(si_snr.item())
                 total_loss_avg = sum(losses) / len(losses)
+                total_si_snr_avg = sum(si_snr_losses)/len(si_snr_losses)
 
                 # updata the model
                 optimizer.zero_grad()
@@ -65,18 +88,19 @@ class Executor:
                 scaler.scale(loss).backward()
                 scaler.step(optimizer)
                 scaler.update()
-
-                if (i + 1) % log_interval == 0:
+                loss.detach().cpu()
+                si_snr.detach().cpu()
+                if (i + 1) % log_interval == 0 and rank==0:
                     logger.info(
-                        tp.row(("TRAIN", epoch, i + 1, total_loss_avg * accum_grad, optimizer.param_groups[0]['lr']),
+                        tp.row(("TRAIN", epoch, i + 1, total_loss_avg * accum_grad, total_si_snr_avg,optimizer.param_groups[0]['lr']),
                                width=10,
                                style='grid'))
                 if (i + 1) == epoch_iter:
                     break
             total_loss_avg = sum(losses) / len(losses)
-            return total_loss_avg
+            return total_loss_avg,total_si_snr_avg
 
-    def cv(self, dataloader, model, val_iter, criterion, epoch, enable_amp, logger,
+    def cv(self, dataloader, model, val_iter, criterion, epoch, enable_amp, logger,rank,
            log_batch_interval=100,
            device=torch.device('cuda')):
         ''' Cross validation on
@@ -84,29 +108,52 @@ class Executor:
         model.eval()
         log_interval = log_batch_interval
         losses = []
-
+        si_snr_losses = []
         with torch.no_grad():
             for i, batch in enumerate(dataloader):
                 features = batch['wav_mix']
                 targets = batch['wav_targets']
                 enroll = batch['spk_embeds']
+                labels = batch['labels']
+                label_lens = batch['label_lens']
+                wav_lens = batch['wav_lens']
+                prob_lens = model.asr_model._get_feat_extract_output_lengths(
+                    wav_lens
+                ).to(torch.int32)
 
                 features = features.float().to(device)  # (B,T,F)
                 targets = targets.float().to(device)
                 enroll = enroll.float().to(device)
+                labels = labels.int().to(device)
+                label_lens = label_lens.int().to(device)
+                wav_lens = wav_lens.int().to(device)
+                prob_lens = prob_lens.int().to(device)
 
                 with torch.cuda.amp.autocast(enabled=enable_amp):
-                    outputs = model(features, enroll)
-                    loss = criterion(outputs, targets).mean()
-
+                    log_probs,outputs = model(
+                        wav_inputs = features, 
+                        spk_embeddings = enroll)
+                    loss,si_snr = criterion(
+                        est_wav = outputs,
+                        target_wav = targets,
+                        wav_len = wav_lens,
+                        log_prob = log_probs,
+                        prob_len = prob_lens,
+                        label = labels,
+                        label_len = label_lens,
+                    )
+                    loss , si_snr = loss.mean() , si_snr.mean()
+                loss.detach().cpu()
+                si_snr.detach().cpu()
                 losses.append(loss.item())
                 total_loss_avg = sum(losses) / len(losses)
-
-                if (i + 1) % log_interval == 0:
+                si_snr_losses.append(si_snr.item())
+                total_si_snr_avg = sum(si_snr_losses)/len(si_snr_losses)
+                if (i + 1) % log_interval == 0 and rank==0:
                     logger.info(
-                        tp.row(("VAL", epoch, i + 1, total_loss_avg, '-'),
+                        tp.row(("VAL", epoch, i + 1, total_loss_avg, total_si_snr_avg,'-'),
                                width=10,
                                style='grid'))
                 if (i + 1) == val_iter:
                     break
-        return total_loss_avg
+        return total_loss_avg,total_si_snr_avg

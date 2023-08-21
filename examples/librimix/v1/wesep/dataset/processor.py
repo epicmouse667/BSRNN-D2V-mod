@@ -13,6 +13,7 @@ from scipy import signal
 from scipy.io import wavfile
 
 from wesep.dataset.FRA_RIR import FRA_RIR
+from transformers import AutoProcessor
 
 # TODO:
 # speaker_mix
@@ -55,7 +56,7 @@ def url_opener(data):
             logging.warning('Failed to open {}'.format(url))
 
 
-def tar_file_and_group(data):
+def tar_file_and_group(data,autoprocessor_path=None):
     """ Expand a stream of open tar files into a stream of tar file contents.
         And groups the file with same prefix
 
@@ -65,6 +66,8 @@ def tar_file_and_group(data):
         Returns:
             Iterable[{key, mix_wav, spk1_wav, spk2_wav, ..., sample_rate}]
     """
+    assert autoprocessor_path is not None
+    autoprocessor = AutoProcessor.from_pretrained(autoprocessor_path)
     for sample in data:
         assert 'stream' in sample
         stream = tarfile.open(fileobj=sample['stream'], mode="r|*")
@@ -87,6 +90,11 @@ def tar_file_and_group(data):
                     if 'spk' in postfix:
                         example[postfix] = file_obj.read().decode(
                             'utf8').strip()
+                    elif 'trans' in postfix:
+                        trans =  file_obj.read().decode(
+                            'utf8').strip()
+                        trans = autoprocessor(text=trans,return_tensors="pt").input_ids
+                        example[postfix] = trans
                     elif postfix in AUDIO_FORMAT_SETS:
                         waveform, sample_rate = torchaudio.load(file_obj)
                         if prefix[-5:-1] == '_spk':

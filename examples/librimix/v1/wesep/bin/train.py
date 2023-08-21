@@ -16,7 +16,6 @@
 import os
 import re
 from pprint import pformat
-
 import fire
 import matplotlib.pyplot as plt
 import tableprint as tp
@@ -31,7 +30,7 @@ from wesep.models import get_model
 from wesep.utils.checkpoint import load_checkpoint, save_checkpoint
 from wesep.utils.executor import Executor
 from wesep.utils.file_utils import load_speaker_embeddings, read_label_file, read_vec_scp_file
-from wesep.utils.metrics import SISNRLoss
+from wesep.utils.metrics import SISNRLoss,SISNR_CTC_Loss
 from wesep.utils.utils import get_logger, parse_config_or_kwargs, set_seed
 
 
@@ -56,7 +55,7 @@ def train(config='conf/config.yaml', **kwargs):
         try:
             os.makedirs(model_dir)
         except IOError:
-            print(model_dir + " already exists !!!")
+            print(model_dir + " already exists for rank {}!!!".format(rank))
             if checkpoint is None:
                 exit(1)
     dist.barrier(device_ids=[gpu])  # let the rank 0 mkdir first
@@ -135,10 +134,10 @@ def train(config='conf/config.yaml', **kwargs):
     # model
     logger.info("<== Model ==>")
     model = get_model(configs['model'])(**configs['model_args'])
-    num_params = sum(param.numel() for param in model.parameters())
+    num_params = sum(param.numel() for param in model.parameters() if param.requires_grad)
 
     if rank == 0:
-        logger.info('speaker_model size: {}'.format(num_params))
+        logger.info('speaker_model size: {:.2f}M'.format(num_params/1024/1024))
     if configs['model_init'] is not None:
         logger.info('Load initial model from {}'.format(configs['model_init']))
         load_checkpoint(model, configs['model_init'])
@@ -165,7 +164,7 @@ def train(config='conf/config.yaml', **kwargs):
     ddp_model = torch.nn.parallel.DistributedDataParallel(model, find_unused_parameters=True)
     device = torch.device("cuda")
 
-    criterion = SISNRLoss()
+    criterion = SISNR_CTC_Loss(configs['alpha'])
     if rank == 0:
         logger.info("<== Loss ==>")
         logger.info("loss criterion is: " + configs['loss'])
@@ -204,7 +203,7 @@ def train(config='conf/config.yaml', **kwargs):
     dist.barrier(device_ids=[gpu])  # synchronize here
     if rank == 0:
         logger.info("<========== Training process ==========>")
-        header = ['Train/Val', 'Epoch', 'iter', 'Loss', 'LR']
+        header = ['Train/Val', 'Epoch', 'iter', 'Loss', 'SI_SNR','LR']
         for line in tp.header(header, width=10, style='grid').split('\n'):
             logger.info(line)
     dist.barrier(device_ids=[gpu])  # synchronize here
@@ -218,15 +217,15 @@ def train(config='conf/config.yaml', **kwargs):
         train_losses = []
         val_losses = []
 
-        train_loss = executor.train(train_dataloader, model, epoch_iter, optimizer, criterion, scheduler, scaler=scaler,
-                                    epoch=epoch, logger=logger, enable_amp=configs['enable_amp'],
+        train_loss,train_si_snr = executor.train(train_dataloader, model, epoch_iter, optimizer, criterion, scheduler, scaler=scaler,
+                                    epoch=epoch, logger=logger, enable_amp=configs['enable_amp'],rank=rank,
                                     log_batch_interval=configs['log_batch_interval'], device=device)
-        val_loss = executor.cv(val_dataloader, model, val_iter, criterion, epoch=epoch, logger=logger,
-                               enable_amp=configs['enable_amp'], log_batch_interval=configs['log_batch_interval'],
+        val_loss,val_si_snr = executor.cv(val_dataloader, model, val_iter, criterion, epoch=epoch, logger=logger,
+                               enable_amp=configs['enable_amp'],rank=rank,log_batch_interval=configs['log_batch_interval'],
                                device=device)
         if rank == 0:
-            logger.info('Epoch {} Train info train_loss {}'.format(epoch, train_loss))
-            logger.info('Epoch {} Val info val_loss {}'.format(epoch, val_loss))
+            logger.info('Epoch {} Train info train_loss {} , train si_snr {}'.format(epoch, train_loss,train_si_snr))
+            logger.info('Epoch {} Val info val_loss {} , dev si_snr {}'.format(epoch, val_loss,val_si_snr))
             train_losses.append(train_loss)
             val_losses.append(val_loss)
 

@@ -20,7 +20,6 @@ if [ ${stage} -le 1 ] && [ ${stop_stage} -ge 1 ]; then
   for dataset in train-100 dev test; do
 #  for dataset in train-360; do
     echo "Preparing files for" $dataset
-    echo $librispeech_path
     # Prepare the meta data for the mixed data
     dataset_path=$mix_data_path/$dataset/mix_${datatype}
     mkdir -p "${data}"/$datatype/${dataset}
@@ -29,10 +28,22 @@ if [ ${stage} -le 1 ] && [ ${stop_stage} -ge 1 ]; then
       sed 's#.wav##' >"${data}"/$datatype/${dataset}/wav.scp
     awk '{print $1}' "${data}"/$datatype/${dataset}/wav.scp |
       awk -F[_-] '{print $0, $1,$4}' >"${data}"/$datatype/${dataset}/utt2spk
+    
+    if [[ $dataset == train* ]]; 
+    then
+      split='train-clean-100'
+    elif [[ $dataset == dev* ]]; 
+    then
+      split='dev-clean'
+    else
+      split='test-clean'
+    fi
     awk '{print $1}' "${data}"/$datatype/${dataset}/wav.scp |
-      awk -F[_-] -v librispeech_path="$librispeech_path" '{print $0,
-      librispeech_path"/"$1"/"$2"/"$1"-"$2".trans.txt",$3,
-      librispeech_path"/"$4"/"$5"/"$4"-"$5".trans.txt",$6}' >"${data}"/$datatype/${dataset}/utt2trans
+      awk -F[_-] -v librispeech_path="$librispeech_path" -v   splitt="$split" '{
+        print $0,
+      librispeech_path"/"splitt"/"$1"/"$2"/"$1"-"$2".trans.txt",$3,
+      librispeech_path"/"splitt"/"$4"/"$5"/"$4"-"$5".trans.txt",$6
+      }' >"${data}"/$datatype/${dataset}/utt2trans.txt
 
     # Prepare the meta data for single speakers
     dataset_path=$mix_data_path/$dataset/s1

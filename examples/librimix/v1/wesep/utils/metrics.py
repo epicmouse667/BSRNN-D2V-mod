@@ -1,5 +1,7 @@
 import logging
 import math
+import torch.nn as nn
+import torch.nn.functional as F
 
 import fast_bss_eval
 import torch
@@ -241,3 +243,79 @@ class SISNRLoss(TimeDomainLoss):
         )
 
         return si_snr
+    
+
+
+class SISNR_CTC_Loss(TimeDomainLoss):
+    def __init__(
+        self,
+        alpha,
+        name = None,
+        zero_mean=True,
+        clamp_db=None,
+        only_for_test=False,
+        is_noise_loss=False,
+        is_dereverb_loss=False,
+    ):
+        _name = "si_snr_ctc_loss" if name is None else name
+        super().__init__(
+            _name,
+            only_for_test=only_for_test,
+            is_noise_loss=is_noise_loss,
+            is_dereverb_loss=is_dereverb_loss,
+        )
+        self.alpha = alpha
+        self.zero_mean = zero_mean
+        self.clamp_db = clamp_db
+
+    def PadAware_SISNR_Wrapper(
+        self,
+        est_wav,
+        target_wav,
+        wav_len
+    ):
+        loss = []
+        batch_size = est_wav.shape[0]
+        assert est_wav.shape[0] == target_wav.shape[0] == wav_len.shape[0]
+        for i in range(batch_size):
+            est = est_wav[:,:wav_len[i]]
+            ref = target_wav[:,:wav_len[i]]
+            assert est.shape == ref.shape
+            si_snr = fast_bss_eval.si_sdr_loss(
+                est=est,
+                ref=ref,
+                zero_mean=self.zero_mean,
+                clamp_db=self.clamp_db,
+                pairwise=False,
+            )
+            loss.append(si_snr[0])
+        return torch.tensor(loss)   
+    def forward(
+        self,
+        est_wav,
+        target_wav,
+        wav_len,
+        log_prob,
+        prob_len,
+        label,
+        label_len,
+    ):
+        log_prob = log_prob.transpose(0,1)
+        batch_size = prob_len.shape[0]
+        assert label.shape[0] == label_len.shape[0] ==prob_len.shape[0] == log_prob.shape[1]
+        assert label.max() <= log_prob.shape[-1]
+        asr_loss =  F.ctc_loss(
+                    log_prob,
+                    label,
+                    prob_len,
+                    label_len,
+                    reduction='none',
+        ).cuda()
+        assert asr_loss.shape[0] == batch_size
+        si_snr = self.PadAware_SISNR_Wrapper(
+            est_wav,
+            target_wav,
+            wav_len,
+        ).cuda()
+        loss = asr_loss * self.alpha + si_snr
+        return loss,si_snr

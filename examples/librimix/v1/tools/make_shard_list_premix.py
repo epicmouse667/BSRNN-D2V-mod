@@ -42,13 +42,15 @@ def write_tar_file(data_list, tar_file, index=0, total=1):
                 spk_info.size = len(spk)
                 tar.addfile(spk_info, spk_data)
                 spk_idx = spk_idx + 1
-            spk_ids = 1
+            spk_idx = 1
             for trans in transes:
                 assert isinstance(trans,str)
+                assert isinstance(line_nums[spk_idx-1],int)
                 trans_file = key + '.trans' + str(spk_idx)
                 trans = trans.encode('utf8')
                 with open(trans,'rb') as fin:
-                    transcription = fin.readliens()[line_nums[spk_idx-1]]
+                    transcription = fin.readlines()[line_nums[spk_idx-1]].decode('utf8') \
+                    .strip().split(" ",1)[-1].encode('utf8')
                 trans_data = io.BytesIO(transcription)
                 trans_info = tarfile.TarInfo(trans_file)
                 trans_info.size = len(transcription)

@@ -82,7 +82,10 @@ class BSRNN(nn.Module):
                  num_repeat=6,
                  use_spk_transform=False,
                  use_bidirectional=True,
-                 spk_fuse_type='concat'):
+                 spk_fuse_type='concat',
+                 return_mask = False,
+                 return_real_mask = True
+                 ):
         super(BSRNN, self).__init__()
 
         self.sr = sr
@@ -143,7 +146,8 @@ class BSRNN(nn.Module):
                               nn.Conv1d(self.feature_dim * 4, self.band_width[i] * 4, 1)
                               )
             )
-
+        self.return_mask = return_mask
+        self.return_real_mask =return_real_mask
     def pad_input(self, input, window, stride):
         """
         Zero-padding input according to window/stride size.
@@ -198,6 +202,7 @@ class BSRNN(nn.Module):
         # B, nband*N, T
         sep_output = sep_output.view(batch_size * nch, self.nband, self.feature_dim, -1)
 
+        mask = []
         sep_subband_spec = []
         for i in range(len(self.band_width)):
             this_output = self.mask[i](sep_output[:, i]).view(batch_size * nch, 2, 2, self.band_width[i], -1)
@@ -209,14 +214,18 @@ class BSRNN(nn.Module):
             est_spec_imag = subband_mix_spec[i].real * this_mask_imag + subband_mix_spec[
                 i].imag * this_mask_real  # B*nch, BW, T
             sep_subband_spec.append(torch.complex(est_spec_real, est_spec_imag))
+            if self.return_mask:
+                mask.append(torch.complex(this_mask_real,this_mask_imag))
         est_spec = torch.cat(sep_subband_spec, 1)  # B*nch, F, T
 
         output = torch.istft(est_spec.view(batch_size * nch, self.enc_dim, -1),
                              n_fft=self.win, hop_length=self.stride,
                              window=torch.hann_window(self.win).to(wav_input.device).type(wav_input.type()),
                              length=nsample)
-
         output = output.view(batch_size, nch, -1)
+        if self.return_mask and self.return_real_mask:
+            mask = torch.cat(mask,dim=1).real
+            return torch.squeeze(output,dim=1),mask.view(batch_size * nch,self.enc_dim,-1)
         return torch.squeeze(output, dim=1)
 
 
