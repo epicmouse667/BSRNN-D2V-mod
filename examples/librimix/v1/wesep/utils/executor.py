@@ -25,13 +25,12 @@ class Executor:
         self.step = 0
 
     def train(self, dataloader, model, epoch_iter, optimizer, criterion, scheduler, scaler, epoch, enable_amp, logger,rank,
-              log_batch_interval=100,
+              accum_iter=1,log_batch_interval=100,
               device=torch.device('cuda')):
         ''' Train one epoch
                 '''
         model.train()
         log_interval = log_batch_interval
-        accum_grad = 1
         losses = []
         si_snr_losses = []
         if isinstance(model, torch.nn.parallel.DistributedDataParallel):
@@ -75,24 +74,25 @@ class Executor:
                         label = labels,
                         label_len = label_lens,
                     )
-                    loss,si_snr = loss.mean()/accum_grad,si_snr.mean()/accum_grad
+                    loss,si_snr = loss.mean()/accum_iter,si_snr.mean()/accum_iter
 
                 losses.append(loss.item())
                 si_snr_losses.append(si_snr.item())
                 total_loss_avg = sum(losses) / len(losses)
                 total_si_snr_avg = sum(si_snr_losses)/len(si_snr_losses)
-
-                # updata the model
-                optimizer.zero_grad()
+                
                 # scaler does nothing here if enable_amp=False
                 scaler.scale(loss).backward()
-                scaler.step(optimizer)
-                scaler.update()
+                if ((i + 1) % accum_iter == 0) or (i + 1 == len(dataloader)):
+                    # updata the model
+                    scaler.step(optimizer)
+                    optimizer.zero_grad()
+                    scaler.update()
                 loss.detach().cpu()
                 si_snr.detach().cpu()
                 if (i + 1) % log_interval == 0 and rank==0:
                     logger.info(
-                        tp.row(("TRAIN", epoch, i + 1, total_loss_avg * accum_grad, total_si_snr_avg,optimizer.param_groups[0]['lr']),
+                        tp.row(("TRAIN", epoch, i + 1, total_loss_avg * accum_iter, total_si_snr_avg * accum_iter,optimizer.param_groups[0]['lr']),
                                width=10,
                                style='grid'))
                 if (i + 1) == epoch_iter:
@@ -149,7 +149,7 @@ class Executor:
                 total_loss_avg = sum(losses) / len(losses)
                 si_snr_losses.append(si_snr.item())
                 total_si_snr_avg = sum(si_snr_losses)/len(si_snr_losses)
-                if (i + 1) % log_interval == 0 and rank==0:
+                if (i + 1) % log_interval == 0 and rank==0: 
                     logger.info(
                         tp.row(("VAL", epoch, i + 1, total_loss_avg, total_si_snr_avg,'-'),
                                width=10,

@@ -211,14 +211,14 @@ def train(config='conf/config.yaml', **kwargs):
     executor = Executor()
     executor.step = 0
     scaler = torch.cuda.amp.GradScaler(enabled=configs['enable_amp'])
-
+    accum_iter = configs.get('accum_iter',1)
     for epoch in range(start_epoch, configs['num_epochs'] + 1):
         train_dataset.set_epoch(epoch)
         train_losses = []
         val_losses = []
 
         train_loss,train_si_snr = executor.train(train_dataloader, model, epoch_iter, optimizer, criterion, scheduler, scaler=scaler,
-                                    epoch=epoch, logger=logger, enable_amp=configs['enable_amp'],rank=rank,
+                                    epoch=epoch, logger=logger, enable_amp=configs['enable_amp'],rank=rank, accum_iter=accum_iter,
                                     log_batch_interval=configs['log_batch_interval'], device=device)
         val_loss,val_si_snr = executor.cv(val_dataloader, model, val_iter, criterion, epoch=epoch, logger=logger,
                                enable_amp=configs['enable_amp'],rank=rank,log_batch_interval=configs['log_batch_interval'],
