@@ -1,6 +1,7 @@
 import numpy as np
 from pesq import pesq
 from pystoi.stoi import stoi
+from torchmetrics.text import WordErrorRate 
 
 def cal_SISNR(est, ref, eps=1e-8):
     """Calcuate Scale-Invariant Source-to-Noise Ratio (SI-SNR)
@@ -32,6 +33,12 @@ def cal_SISNRi(est, ref, mix, eps=1e-8):
 
     return sisnr1, sisnr1 - sisnr2
 
+def cal_WER(est,ref):
+    assert isinstance(est,str) and isinstance(ref,str)
+    est = est.upper()
+    ref = ref.upper()
+    wer = WordErrorRate()
+    return wer([est],[ref])
 
 def cal_PESQ(est, ref):
     assert len(est) == len(ref)

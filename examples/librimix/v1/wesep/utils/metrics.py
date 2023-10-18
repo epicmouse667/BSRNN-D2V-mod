@@ -278,9 +278,9 @@ class SISNR_CTC_Loss(TimeDomainLoss):
         batch_size = est_wav.shape[0]
         assert est_wav.shape[0] == target_wav.shape[0] == wav_len.shape[0]
         for i in range(batch_size):
-            est = est_wav[:,:wav_len[i]]
-            ref = target_wav[:,:wav_len[i]]
-            assert est.shape == ref.shape
+            est = est_wav[i,:wav_len[i]]
+            ref = target_wav[i,:wav_len[i]]
+            assert est.shape == ref.shape,'est shape: {} ref shape: {}'.format(est.shape,ref.shape)
             si_snr = fast_bss_eval.si_sdr_loss(
                 est=est,
                 ref=ref,
@@ -288,7 +288,7 @@ class SISNR_CTC_Loss(TimeDomainLoss):
                 clamp_db=self.clamp_db,
                 pairwise=False,
             )
-            loss.append(si_snr[0])
+            loss.append(si_snr)
         return torch.tensor(loss)   
     def forward(
         self,
@@ -312,10 +312,17 @@ class SISNR_CTC_Loss(TimeDomainLoss):
                     reduction='none',
         ).cuda()
         assert asr_loss.shape[0] == batch_size
-        si_snr = self.PadAware_SISNR_Wrapper(
-            est_wav,
-            target_wav,
-            wav_len,
-        ).cuda()
+        # si_snr = self.PadAware_SISNR_Wrapper(
+        #     est_wav,
+        #     target_wav,
+        #     wav_len,
+        # ).cuda()
+        si_snr = fast_bss_eval.si_sdr_loss(
+                est=est_wav,
+                ref=target_wav,
+                zero_mean=True,
+                clamp_db=None,
+                pairwise=False,
+            )
         loss = asr_loss * self.alpha + si_snr
-        return loss,si_snr
+        return loss,si_snr,asr_loss

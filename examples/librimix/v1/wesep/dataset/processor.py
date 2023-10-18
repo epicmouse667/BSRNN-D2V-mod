@@ -93,8 +93,9 @@ def tar_file_and_group(data,autoprocessor_path=None):
                     elif 'trans' in postfix:
                         trans =  file_obj.read().decode(
                             'utf8').strip()
-                        trans = autoprocessor(text=trans,return_tensors="pt").input_ids
-                        example[postfix] = trans
+                        input_ids = autoprocessor(text=trans,return_tensors="pt").input_ids
+                        example[postfix] = input_ids
+                        example['{}_raw'.format(postfix)] = trans
                     elif postfix in AUDIO_FORMAT_SETS:
                         waveform, sample_rate = torchaudio.load(file_obj)
                         if prefix[-5:-1] == '_spk':
@@ -103,6 +104,9 @@ def tar_file_and_group(data,autoprocessor_path=None):
                         else:
                             example['wav_mix'] = waveform
                             example['sample_rate'] = sample_rate
+                            example['processed_wav_mix'] = autoprocessor(
+                                waveform,return_tensors='pt',sampling_rate=sample_rate
+                            )['input_values']
                     else:
                         example[postfix] = file_obj.read()
                 except Exception as ex:

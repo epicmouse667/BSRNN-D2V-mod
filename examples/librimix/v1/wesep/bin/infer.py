@@ -10,8 +10,9 @@ from wesep.models import get_model
 
 from wesep.dataset.dataset import Dataset, tse_collate_fn_2spk
 from wesep.utils.file_utils import read_label_file, read_vec_scp_file
-from wesep.utils.score import cal_SISNRi
+from wesep.utils.score import cal_SISNRi,cal_WER
 from wesep.utils.utils import get_logger, parse_config_or_kwargs, set_seed
+from transformers import Data2VecAudioForCTC,AutoProcessor
 
 os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 os.environ['TORCH_USE_CUDA_DSA'] = '1'
@@ -21,6 +22,7 @@ def infer(config='confs/conf.yaml', **kwargs):
     start = time.time()
     total_SISNR = 0
     total_SISNRi = 0
+    total_wer = 0
     total_cnt = 0
 
     configs = parse_config_or_kwargs(config, **kwargs)
@@ -34,7 +36,7 @@ def infer(config='confs/conf.yaml', **kwargs):
     model_path = os.path.join(configs['checkpoint'])
     model.load_state_dict(torch.load(model_path, map_location="cpu"))
 
-    logger = get_logger(configs['exp_dir'], 'infer.log')
+    logger = get_logger(configs['exp_dir'], 'infer1.log')
     logger.info("Load checkpoint from {}".format(model_path))
     save_audio_dir = os.path.join(configs['exp_dir'], 'audio')
     model = model.to(device)
@@ -72,25 +74,21 @@ def infer(config='confs/conf.yaml', **kwargs):
             enroll = batch['spk_embeds']
             spk = batch['spk']
             key = batch['key']
+            transes = batch['transes']
 
             features = features.float().to(device)  # (B,T,F)
             targets = targets.float().to(device)
             enroll = enroll.float().to(device)
 
-            outputs = model(features, enroll)
-
-            if torch.min(outputs.max(dim=1).values) > 0:
-                outputs = (outputs / abs(outputs).max(dim=1, keepdim=True)[0] * 0.9).cpu().numpy()
-            else:
-                outputs = outputs.cpu().numpy()
-
-            # file1 = os.path.join(save_audio_dir, f'Utt{total_cnt + 1}-{key[0]}-T{spk[0]}.wav')
-            # soundfile.write(file1, outputs[0], 16000)
-            # file2 = os.path.join(save_audio_dir, f'Utt{total_cnt + 1}-{key[1]}-T{spk[1]}.wav')
-            # soundfile.write(file2, outputs[1], 16000)
+            logits,outputs = model(features,None,enroll)
+            processor = AutoProcessor.from_pretrained(configs['model_args']['pretrained_d2v4ctc_dir'])
+            # outputs =torch.cat([processor(x,sampling_rate=model.sr,return_tensors="pt")['input_values'] for x in targets],dim=0) 
+            predicted_ids = torch.argmax(logits, dim=-1)
+            est_trans = processor.batch_decode(predicted_ids)
+            
 
             ref = targets.cpu().numpy()
-            ests = outputs
+            ests = outputs.cpu().numpy()
             mix = features.cpu().numpy()
 
             if ests[0].size != ref[0].size:
@@ -101,12 +99,14 @@ def infer(config='confs/conf.yaml', **kwargs):
                 SISNR1, delta1 = cal_SISNRi(ests_1, ref_1, mix_1)
             else:
                 SISNR1, delta1 = cal_SISNRi(ests[0], ref[0], mix[0])
+            wer1 = cal_WER(est=est_trans[0],ref=transes[0])
 
             logger.info(
-                "Num={} | Utt={} | Target speaker={} | SI-SNR={:.2f} | SI-SNRi={:.2f}".format(total_cnt + 1, key[0],
-                                                                                              spk[0], SISNR1, delta1))
+                "Num={} | Utt={} | Target speaker={} | SI-SNR={:.2f} | SI-SNRi={:.2f} | WER={:2f}".format(total_cnt + 1, key[0],
+                                                                                              spk[0], SISNR1, delta1,wer1))
             total_SISNR += SISNR1
             total_SISNRi += delta1
+            total_wer += wer1
             total_cnt += 1
 
             if ests[1].size != ref[1].size:
@@ -117,11 +117,13 @@ def infer(config='confs/conf.yaml', **kwargs):
                 SISNR2, delta2 = cal_SISNRi(ests_2, ref_2, mix_2)
             else:
                 SISNR2, delta2 = cal_SISNRi(ests[1], ref[1], mix[1])
+            wer2 = cal_WER(est=est_trans[1],ref=transes[1])
             logger.info(
-                "Num={} | Utt={} | Target speaker={} | SI-SNR={:.2f} | SI-SNRi={:.2f}".format(total_cnt + 1, key[1],
-                                                                                              spk[1], SISNR2, delta2))
+                "Num={} | Utt={} | Target speaker={} | SI-SNR={:.2f} | SI-SNRi={:.2f} | WER={:2f}".format(total_cnt + 1, key[1],
+                                                                                              spk[1], SISNR2, delta2,wer2))
             total_SISNR += SISNR2
             total_SISNRi += delta2
+            total_wer += wer2
             total_cnt += 1
 
             # if (i + 1) == test_iter:
@@ -131,6 +133,7 @@ def infer(config='confs/conf.yaml', **kwargs):
     logger.info('Time Elapsed: {:.1f}s'.format(end - start))
     logger.info("Average SI-SNR: {:.2f}".format(total_SISNR / total_cnt))
     logger.info("Average SI-SNRi: {:.2f}".format(total_SISNRi / total_cnt))
+    logger.info("Average WER: {:.2f}".format(total_wer / total_cnt))
 
 
 if __name__ == '__main__':
