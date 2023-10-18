@@ -129,6 +129,7 @@ class DataList(IterableDataset):
                 yield data
 
 
+
 def tse_collate_fn_2spk(batch):
     new_batch = {}
 
@@ -137,23 +138,114 @@ def tse_collate_fn_2spk(batch):
     spk_embeds = []
     spk = []
     key = []
+    labels = []
+    wav_lens = []
+    label_lens = []
+    processed_wav_mix = []
+    transes = []
     for s in batch:
         wav_mix.append(s['wav_mix'])
+        processed_wav_mix.append(s['processed_wav_mix'])
         wav_targets.append(s['wav_spk1'])
         spk.append(s['spk1'])
         key.append(s['key'])
         spk_embeds.append(torch.from_numpy(s['spk1_embed'].copy()))
+        labels.append(s['trans1'])
+        label_lens.append(len(s['trans1'][0]))
+        transes.append(s['trans1_raw'])
+        wav_lens.append(s['wav_mix'].shape[-1])
 
         wav_mix.append(s['wav_mix'])
+        processed_wav_mix.append(s['processed_wav_mix'])
         wav_targets.append(s['wav_spk2'])
         spk.append(s['spk2'])
         key.append(s['key'])
+        labels.append(s['trans2'])
+        transes.append(s['trans2_raw'])
         spk_embeds.append(torch.from_numpy(s['spk2_embed'].copy()))
-    new_batch['wav_mix'] = torch.concat(wav_mix)
-    new_batch['wav_targets'] = torch.concat(wav_targets)
-    new_batch['spk_embeds'] = torch.concat(spk_embeds)
+        label_lens.append(len(s['trans2'][0]))
+        wav_lens.append(s['wav_mix'].shape[-1])
+    new_batch['wav_mix'] = torch.nn.utils.rnn.pad_sequence(
+        [wav.view(-1,1) for wav in wav_mix]
+    ).transpose(0,1).squeeze(-1)
+    new_batch['processed_wav_mix'] = torch.nn.utils.rnn.pad_sequence(
+        [processed_wav.view(-1,1) for processed_wav in processed_wav_mix]
+    ).transpose(0,1).squeeze(-1)
+    new_batch['wav_targets'] = torch.nn.utils.rnn.pad_sequence(
+        [wav.view(-1,1) for wav in wav_targets]
+    ).transpose(0,1).squeeze(-1)
+    new_batch['spk_embeds'] = torch.nn.utils.rnn.pad_sequence(
+        [wav.view(-1,1) for wav in spk_embeds]
+    ).transpose(0,1).squeeze(-1)
     new_batch['spk'] = spk
     new_batch['key'] = key
+    new_batch['labels'] = torch.nn.utils.rnn.pad_sequence(
+        [label.view(-1,1) for label in labels]
+    ).transpose(0,1).squeeze(-1)
+    new_batch['label_lens']=torch.tensor(label_lens,dtype=torch.int)
+    new_batch['wav_lens']=torch.tensor(wav_lens,dtype=torch.long)
+    new_batch['transes'] = transes
+    return new_batch
+
+
+
+def tse_collate_fn_2spk_longutt(batch):
+    new_batch = {}
+
+    wav_mix = []
+    wav_targets = []
+    spk_embeds = []
+    spk = []
+    key = []
+    labels = []
+    wav_lens = []
+    label_lens = []
+    processed_wav_mix = []
+    for s in batch:
+        duration1 = sum(s['wav_spk1'][0] != 0.0) 
+        duration2 = sum(s['wav_spk2'][0] != 0.0) 
+        if duration1 < duration2:
+            wav_mix.append(s['wav_mix'])
+            processed_wav_mix.append(s['processed_wav_mix'])
+            wav_targets.append(s['wav_spk1'])
+            spk.append(s['spk1'])
+            key.append(s['key'])
+            spk_embeds.append(torch.from_numpy(s['spk1_embed'].copy()))
+            labels.append(s['trans1'])
+            label_lens.append(len(s['trans1'][0]))
+            wav_lens.append(s['wav_mix'].shape[-1])
+        # elif duration1 == duration2:
+        #     raise ValueError
+        #     exit(1)
+        else:
+            wav_mix.append(s['wav_mix'])
+            processed_wav_mix.append(s['processed_wav_mix'])
+            wav_targets.append(s['wav_spk2'])
+            spk.append(s['spk2'])
+            key.append(s['key'])
+            labels.append(s['trans2'])
+            spk_embeds.append(torch.from_numpy(s['spk2_embed'].copy()))
+            label_lens.append(len(s['trans2'][0]))
+            wav_lens.append(s['wav_mix'].shape[-1])
+    new_batch['wav_mix'] = torch.nn.utils.rnn.pad_sequence(
+        [wav.view(-1,1) for wav in wav_mix]
+    ).transpose(0,1).squeeze(-1)
+    new_batch['processed_wav_mix'] = torch.nn.utils.rnn.pad_sequence(
+        [processed_wav.view(-1,1) for processed_wav in processed_wav_mix]
+    ).transpose(0,1).squeeze(-1)
+    new_batch['wav_targets'] = torch.nn.utils.rnn.pad_sequence(
+        [wav.view(-1,1) for wav in wav_targets]
+    ).transpose(0,1).squeeze(-1)
+    new_batch['spk_embeds'] = torch.nn.utils.rnn.pad_sequence(
+        [wav.view(-1,1) for wav in spk_embeds]
+    ).transpose(0,1).squeeze(-1)
+    new_batch['spk'] = spk
+    new_batch['key'] = key
+    new_batch['labels'] = torch.nn.utils.rnn.pad_sequence(
+        [label.view(-1,1) for label in labels]
+    ).transpose(0,1).squeeze(-1)
+    new_batch['label_lens']=torch.tensor(label_lens,dtype=torch.int)
+    new_batch['wav_lens']=torch.tensor(wav_lens,dtype=torch.long)
     return new_batch
 
 
@@ -190,7 +282,8 @@ def Dataset(data_type,
     dataset = DataList(lists, shuffle=shuffle, repeat_dataset=repeat_dataset)
     if data_type == 'shard':
         dataset = Processor(dataset, processor.url_opener)
-        dataset = Processor(dataset, processor.tar_file_and_group)
+        dataset = Processor(dataset, processor.tar_file_and_group,
+                            autoprocessor_path = configs['pretrained_asr_model_path'])
     else:
         dataset = Processor(dataset, processor.parse_raw)
 

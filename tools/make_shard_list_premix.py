@@ -31,7 +31,7 @@ def write_tar_file(data_list, tar_file, index=0, total=1):
     write_time = 0.0
     with tarfile.open(tar_file, "w") as tar:
         for item in data_list:
-            key, spks, wavs = item
+            key, spks, wavs, transes, line_nums = item
             spk_idx = 1
             for spk in spks:
                 assert isinstance(spk, str)
@@ -41,6 +41,20 @@ def write_tar_file(data_list, tar_file, index=0, total=1):
                 spk_info = tarfile.TarInfo(spk_file)
                 spk_info.size = len(spk)
                 tar.addfile(spk_info, spk_data)
+                spk_idx = spk_idx + 1
+            spk_idx = 1
+            for trans in transes:
+                assert isinstance(trans,str)
+                assert isinstance(line_nums[spk_idx-1],int)
+                trans_file = key + '.trans' + str(spk_idx)
+                trans = trans.encode('utf8')
+                with open(trans,'rb') as fin:
+                    transcription = fin.readlines()[line_nums[spk_idx-1]].decode('utf8') \
+                    .strip().split(" ",1)[-1].encode('utf8')
+                trans_data = io.BytesIO(transcription)
+                trans_info = tarfile.TarInfo(trans_file)
+                trans_info.size = len(transcription)
+                tar.addfile(trans_info,trans_data)
                 spk_idx = spk_idx + 1
 
             spk_idx = 0
@@ -85,6 +99,7 @@ def get_args():
                         help='whether to shuffle data')
     parser.add_argument('wav_file', help='wav file')
     parser.add_argument('utt2spk_file', help='utt2spk file')
+    parser.add_argument('utt2trans_file', help='utt2spk file')
     parser.add_argument('shards_dir', help='output shards dir')
     parser.add_argument('shards_list', help='output shards list file')
     args = parser.parse_args()
@@ -102,18 +117,38 @@ def main():
         for line in fin:
             arr = line.strip().split()
             key = arr[0]  # key = os.path.splitext(arr[0])[0]
-            wav_table[key] = [arr[i + 1] for i in range(len(arr) - 1)]
+            if key not in wav_table:
+                wav_table[key] = {}
+            wav_table[key]["wavs"] = [arr[i + 1] for i in range(len(arr) - 1)]
 
-    data = []
     with open(args.utt2spk_file, 'r', encoding='utf8') as fin:
         for line in fin:
             arr = line.strip().split()
             key = arr[0]  # key = os.path.splitext(arr[0])[0]
             spks = [arr[i + 1] for i in range(len(arr) - 1)]
             assert key in wav_table
-            wavs = wav_table[key]
-            # print(key, spks, wavs)
-            data.append((key, spks, wavs))
+            wav_table[key]["spks"] = spks
+    
+    with open(args.utt2trans_file, 'r', encoding='utf8') as fin:
+        for line in fin:
+            arr = line.strip().split()
+            key = arr[0]  # key = os.path.splitext(arr[0])[0]
+            trans = [arr[i + 1] for i in range(0,len(arr) - 1,2)]
+            line_nums = [int(arr[i + 1]) for i in range(1,len(arr) - 1,2)]
+            assert key in wav_table
+            wav_table[key]["trans"] = trans
+            wav_table[key]["line_nums"] = line_nums
+
+    data = []
+    for key in wav_table:  
+        data.append(
+            (key, 
+             wav_table[key]["spks"], 
+             wav_table[key]["wavs"],
+             wav_table[key]["trans"],
+             wav_table[key]["line_nums"],
+             )
+        )
 
     if args.shuffle:
         random.shuffle(data)

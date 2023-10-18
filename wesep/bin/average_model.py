@@ -16,6 +16,7 @@
 
 import argparse
 import glob
+import os.path
 import re
 
 import torch
@@ -39,6 +40,14 @@ def get_args():
                         default=65536,  # Big enough
                         type=int,
                         help='max epoch used for averaging model')
+    parser.add_argument('--mode',
+                        default='last',
+                        type=str,
+                        help='use last epochs for average or best epochs')
+    parser.add_argument('--epochs',
+                        default='1,2,3,4,5',
+                        type=str,
+                        help='use last epochs for average or best epochs')
     args = parser.parse_args()
     print(args)
     return args
@@ -46,13 +55,16 @@ def get_args():
 
 def main():
     args = get_args()
-
-    path_list = glob.glob(
-        '{}/[!avg][!final][!convert]*.pt'.format(args.src_path))
-    path_list = sorted(
-        path_list,
-        key=lambda p: int(re.findall(r"(?<=model_)\d*(?=.pt)", p)[0]))
-    path_list = path_list[-args.num:]
+    if args.mode == 'final':
+        path_list = glob.glob(
+            '{}/[!avg][!final][!convert]*.pt'.format(args.src_path))
+        path_list = sorted(
+            path_list,
+            key=lambda p: int(re.findall(r"(?<=model_)\d*(?=.pt)", p)[0]))
+        path_list = path_list[-args.num:]
+    else:
+        epoch_indexes = [x for x in args.epochs.split(',')]
+        path_list = [os.path.join(args.src_path, "model_" + x + ".pt") for x in epoch_indexes]
     print(path_list)
     avg = None
     num = args.num

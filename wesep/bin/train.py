@@ -16,7 +16,6 @@
 import os
 import re
 from pprint import pformat
-
 import fire
 import matplotlib.pyplot as plt
 import tableprint as tp
@@ -26,13 +25,14 @@ import yaml
 from torch.utils.data import DataLoader
 
 import wesep.utils.schedulers as schedulers
-from wesep.dataset.dataset import Dataset, tse_collate_fn_2spk
+from wesep.dataset.dataset import Dataset, tse_collate_fn_2spk,tse_collate_fn_2spk_longutt
 from wesep.models import get_model
 from wesep.utils.checkpoint import load_checkpoint, save_checkpoint
-from wesep.utils.executor import Executor
+from wesep.utils.executor import JointExecutor,Executor
 from wesep.utils.file_utils import load_speaker_embeddings, read_label_file, read_vec_scp_file
-from wesep.utils.metrics import SISNRLoss
+from wesep.utils.metrics import SISNRLoss,SISNR_CTC_Loss
 from wesep.utils.utils import get_logger, parse_config_or_kwargs, set_seed
+from torch.nn.parallel import DistributedDataParallel as DDP
 
 
 def train(config='conf/config.yaml', **kwargs):
@@ -56,7 +56,7 @@ def train(config='conf/config.yaml', **kwargs):
         try:
             os.makedirs(model_dir)
         except IOError:
-            print(model_dir + " already exists !!!")
+            print(model_dir + " already exists for rank {}!!!".format(rank))
             if checkpoint is None:
                 exit(1)
     dist.barrier(device_ids=[gpu])  # let the rank 0 mkdir first
@@ -117,8 +117,6 @@ def train(config='conf/config.yaml', **kwargs):
                           whole_utt=configs.get('whole_utt', False),
                           repeat_dataset=configs.get('repeat_dataset', False),
                           reverb=False)
-    train_dataloader = DataLoader(train_dataset, **configs['dataloader_args'], collate_fn=tse_collate_fn_2spk)
-    val_dataloader = DataLoader(val_dataset, **configs['dataloader_args'], collate_fn=tse_collate_fn_2spk)
     batch_size = configs['dataloader_args']['batch_size']
     if configs['dataset_args'].get('sample_num_per_epoch', 0) > 0:
         sample_num_per_epoch = configs['dataset_args']['sample_num_per_epoch']
@@ -135,10 +133,10 @@ def train(config='conf/config.yaml', **kwargs):
     # model
     logger.info("<== Model ==>")
     model = get_model(configs['model'])(**configs['model_args'])
-    num_params = sum(param.numel() for param in model.parameters())
+    num_params = sum(param.numel() for param in model.parameters() if param.requires_grad)
 
     if rank == 0:
-        logger.info('speaker_model size: {}'.format(num_params))
+        logger.info('speaker_model size: {:.2f}M'.format(num_params/1024/1024))
     if configs['model_init'] is not None:
         logger.info('Load initial model from {}'.format(configs['model_init']))
         load_checkpoint(model, configs['model_init'])
@@ -162,17 +160,15 @@ def train(config='conf/config.yaml', **kwargs):
 
     # ddp_model
     model.cuda()
-    ddp_model = torch.nn.parallel.DistributedDataParallel(model, find_unused_parameters=True)
+    model = DDP(model,device_ids=[gpu]).module
     device = torch.device("cuda")
-
-    criterion = SISNRLoss()
     if rank == 0:
         logger.info("<== Loss ==>")
         logger.info("loss criterion is: " + configs['loss'])
 
     configs['optimizer_args']['lr'] = configs['scheduler_args']['initial_lr']
     optimizer = getattr(torch.optim,
-                        configs['optimizer'])(ddp_model.parameters(),
+                        configs['optimizer'])(model.parameters(),
                                               **configs['optimizer_args'])
     if rank == 0:
         logger.info("<== Optimizer ==>")
@@ -184,7 +180,7 @@ def train(config='conf/config.yaml', **kwargs):
     configs['scheduler_args']['epoch_iter'] = epoch_iter
     # here, we consider the batch_size 4 as the base, the learning rate will be
     # adjusted according to the batchsize and world_size used in different setup
-    configs['scheduler_args']['scale_ratio'] = 1.0 * world_size * configs['dataloader_args']['batch_size'] / 8
+    configs['scheduler_args']['scale_ratio'] = 1.0 * world_size * batch_size / 8
 
     scheduler = getattr(schedulers,
                         configs['scheduler'])(optimizer,
@@ -204,33 +200,59 @@ def train(config='conf/config.yaml', **kwargs):
     dist.barrier(device_ids=[gpu])  # synchronize here
     if rank == 0:
         logger.info("<========== Training process ==========>")
-        header = ['Train/Val', 'Epoch', 'iter', 'Loss', 'LR']
+        header = ['Train/Val', 'Epoch', 'iter', 'Loss', 'SI_SNR','LR','CTC']
         for line in tp.header(header, width=10, style='grid').split('\n'):
             logger.info(line)
     dist.barrier(device_ids=[gpu])  # synchronize here
 
-    executor = Executor()
+    executor = JointExecutor()
     executor.step = 0
     scaler = torch.cuda.amp.GradScaler(enabled=configs['enable_amp'])
-
+    freeze_epoch = configs.get('freeze_epoch',1)
+    accum_iter = configs.get('accum_iter',1)
     for epoch in range(start_epoch, configs['num_epochs'] + 1):
         train_dataset.set_epoch(epoch)
         train_losses = []
         val_losses = []
+        # if configs['freeze_extraction_branch'] and epoch==start_epoch:
+        #     logger.info("freezing parameters ......")
+        #     criterion = SISNR_CTC_Loss(configs['alpha'])
+        #     model.freeze_extraction_branch()
+        #     frozen = True
+        # if configs['freeze_extraction_branch'] and epoch>=freeze_epoch and frozen:
+        #     logger.info('unfreeze the parameters .....')
+        #     model.unfreeze_extraction_branch()
+        #     # model.unfreeze_extraction_mask()
+        #     criterion = SISNR_CTC_Loss(configs['alpha'][1])
+        #     frozen = False
+        if epoch>3:
+            criterion = SISNR_CTC_Loss(configs['alpha'][1])
+        else:
+            criterion =  SISNR_CTC_Loss(configs['alpha'][0])
+        # criterion = SISNRLoss()
+        if epoch >= 0:
+            collate_fn = tse_collate_fn_2spk
+            configs['dataloader_args']['batch_size'] = batch_size 
+        # else:
+        #     logger.info('using only long utterance to train ....')
+        #     collate_fn = tse_collate_fn_2spk_longutt
+        #     configs['dataloader_args']['batch_size'] = batch_size
+        train_dataloader = DataLoader(train_dataset, **configs['dataloader_args'],collate_fn=collate_fn)
+        val_dataloader = DataLoader(val_dataset, **configs['dataloader_args'], collate_fn=collate_fn)
 
-        train_loss = executor.train(train_dataloader, model, epoch_iter, optimizer, criterion, scheduler, scaler=scaler,
-                                    epoch=epoch, logger=logger, enable_amp=configs['enable_amp'],
+        train_si_snr = executor.train(train_dataloader, model, epoch_iter, optimizer, criterion, scheduler, scaler=scaler,
+                                    epoch=epoch, logger=logger, enable_amp=configs['enable_amp'],rank=rank,accum_iter=accum_iter,
                                     log_batch_interval=configs['log_batch_interval'], device=device)
-        val_loss = executor.cv(val_dataloader, model, val_iter, criterion, epoch=epoch, logger=logger,
-                               enable_amp=configs['enable_amp'], log_batch_interval=configs['log_batch_interval'],
+        val_si_snr = executor.cv(val_dataloader, model, val_iter, criterion, epoch=epoch, logger=logger,
+                               enable_amp=configs['enable_amp'],rank=rank,log_batch_interval=configs['log_batch_interval'],
                                device=device)
         if rank == 0:
-            logger.info('Epoch {} Train info train_loss {}'.format(epoch, train_loss))
-            logger.info('Epoch {} Val info val_loss {}'.format(epoch, val_loss))
-            train_losses.append(train_loss)
-            val_losses.append(val_loss)
+            logger.info('Epoch {} Train info train_loss {} , train si_snr {}'.format(epoch, '-',train_si_snr))
+            logger.info('Epoch {} Val info val_loss {} , dev si_snr {}'.format(epoch, '-',val_si_snr))
+            # train_losses.append(train_loss)
+            # val_losses.append(val_loss)
 
-            best_loss = val_loss
+            best_loss = val_si_snr
             scheduler.best = best_loss
             # scheduler.step(val_loss)
 
